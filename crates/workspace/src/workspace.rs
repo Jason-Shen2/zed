@@ -172,6 +172,7 @@ use crate::{
 
 pub const SERIALIZATION_THROTTLE_TIME: Duration = Duration::from_millis(200);
 pub const MAX_RECENT_SELECTIONS: usize = 20;
+const LEFT_DOCK_ACTIVITY_BAR_WIDTH: Pixels = px(40.);
 
 static ZED_WINDOW_SIZE: LazyLock<Option<Size<Pixels>>> = LazyLock::new(|| {
     env::var("ZED_WINDOW_SIZE")
@@ -1379,6 +1380,7 @@ pub struct Workspace {
     maximized_pane: Option<WeakEntity<Pane>>,
     center: PaneGroup,
     left_dock: Entity<Dock>,
+    left_dock_buttons: Entity<PanelButtons>,
     bottom_dock: Entity<Dock>,
     right_dock: Entity<Dock>,
     panes: Vec<Entity<Pane>>,
@@ -1391,6 +1393,7 @@ pub struct Workspace {
     toast_layer: Entity<ToastLayer>,
     titlebar_item: Option<AnyView>,
     titlebar_focus_handle: FocusHandle,
+    left_dock_activity_bar_focus_handle: FocusHandle,
     region_focus_handles: RegionFocusHandles,
     notifications: Notifications,
     suppressed_notifications: HashSet<NotificationId>,
@@ -1760,7 +1763,7 @@ impl Workspace {
         let left_dock = Dock::new(DockPosition::Left, modal_layer.clone(), window, cx);
         let bottom_dock = Dock::new(DockPosition::Bottom, modal_layer.clone(), window, cx);
         let right_dock = Dock::new(DockPosition::Right, modal_layer.clone(), window, cx);
-        let left_dock_buttons = cx.new(|cx| PanelButtons::new(left_dock.clone(), cx));
+        let left_dock_buttons = cx.new(|cx| PanelButtons::vertical(left_dock.clone(), cx));
         let bottom_dock_buttons = cx.new(|cx| PanelButtons::new(bottom_dock.clone(), cx));
         let right_dock_buttons = cx.new(|cx| PanelButtons::new(right_dock.clone(), cx));
         let multi_workspace = window
@@ -1770,7 +1773,6 @@ impl Workspace {
         let status_bar = cx.new(|cx| {
             let mut status_bar =
                 StatusBar::new(&center_pane.clone(), multi_workspace.clone(), window, cx);
-            status_bar.add_left_item(left_dock_buttons, window, cx);
             status_bar.add_right_item(right_dock_buttons, window, cx);
             status_bar.add_right_item(bottom_dock_buttons, window, cx);
             status_bar
@@ -1859,10 +1861,12 @@ impl Workspace {
             toast_layer,
             titlebar_item: None,
             titlebar_focus_handle: cx.focus_handle(),
+            left_dock_activity_bar_focus_handle: cx.focus_handle(),
             region_focus_handles: RegionFocusHandles::new(cx),
             notifications: Notifications::default(),
             suppressed_notifications: HashSet::default(),
             left_dock,
+            left_dock_buttons,
             bottom_dock,
             right_dock,
             _panels_task: None,
@@ -8279,8 +8283,8 @@ impl Workspace {
     }
 
     /// Returns the currently-visible major window regions ("parts"), in a stable
-    /// cyclic order: title bar, left dock, editor, right dock, bottom dock,
-    /// status bar. Closed docks are skipped. Used by
+    /// cyclic order: title bar, activity bar, left dock, editor, right dock,
+    /// bottom dock, status bar. Closed docks are skipped. Used by
     /// [`FocusNextPart`]/[`FocusPreviousPart`] so keyboard and screen-reader
     /// users can move between regions without a mouse.
     fn focusable_parts(&self, cx: &App) -> Vec<FocusablePart> {
@@ -8306,6 +8310,9 @@ impl Workspace {
             // its first control rather than the toolbar container.
             parts.push(FocusablePart::toolbar(self.titlebar_focus_handle.clone()));
         }
+        parts.push(FocusablePart::toolbar(
+            self.left_dock_activity_bar_focus_handle.clone(),
+        ));
         parts.extend(dock_part(
             &self.left_dock,
             &self.region_focus_handles.left_dock,
@@ -8408,6 +8415,31 @@ impl Workspace {
         // If Tab navigation wandered out of the toolbar, restore the previous
         // item so the ends of the toolbar act as stops rather than exits.
         if !landed_in_titlebar && let Some(previous) = previous {
+            window.focus(&previous, cx);
+        }
+        cx.notify();
+    }
+
+    /// Moves focus between activity-bar controls in response to arrow keys.
+    /// Navigation is clamped to the vertical toolbar so Up and Down stop at
+    /// its ends instead of leaving the toolbar.
+    fn move_left_dock_activity_bar_item_focus(
+        &mut self,
+        forward: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let previous = window.focused(cx);
+        if forward {
+            window.focus_next(cx);
+        } else {
+            window.focus_prev(cx);
+        }
+        let landed_in_activity_bar = window.focused(cx).is_some_and(|handle| {
+            self.left_dock_activity_bar_focus_handle
+                .contains(&handle, window)
+        });
+        if !landed_in_activity_bar && let Some(previous) = previous {
             window.focus(&previous, cx);
         }
         cx.notify();
@@ -8908,9 +8940,9 @@ struct FocusablePart {
 }
 
 enum PartBehavior {
-    /// An ARIA toolbar (title bar, status bar). Region navigation focuses the
-    /// container and descends to its first control, which is usable for
-    /// everyone, so this is not gated on assistive technology.
+    /// An ARIA toolbar (title bar, Activity Bar, status bar). Region navigation
+    /// focuses the container and descends to its first control, which is usable
+    /// for everyone, so this is not gated on assistive technology.
     Toolbar,
     /// A landmark region (a dock or the editor). The wrapper carries the
     /// landmark role + label, so when a screen reader is active we focus it so
@@ -9241,7 +9273,8 @@ impl Render for Workspace {
                                     |_, _, _, _| {},
                                 )
                                 .absolute()
-                                .size_full()
+                                .inset_0()
+                                .left(LEFT_DOCK_ACTIVITY_BAR_WIDTH)
                             })
                             .when(self.zoomed.is_none(), |this| {
                                 this.on_drag_move(cx.listener(
@@ -9283,8 +9316,60 @@ impl Render for Workspace {
                                     },
                                 ))
                             })
-                            .child({
-                                match bottom_dock_layout {
+                            .child(
+                                h_flex()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .w_full()
+                                    .overflow_hidden()
+                                    .child(
+                                        div()
+                                            .id("left-dock-activity-bar")
+                                            .debug_selector(|| "left-dock-activity-bar".to_owned())
+                                            .track_focus(
+                                                &self.left_dock_activity_bar_focus_handle,
+                                            )
+                                            .tab_group()
+                                            .role(gpui::Role::Toolbar)
+                                            .aria_label("Activity bar")
+                                            .aria_orientation(gpui::Orientation::Vertical)
+                                            .on_key_down(cx.listener(
+                                                |workspace,
+                                                 event: &gpui::KeyDownEvent,
+                                                 window,
+                                                 cx| {
+                                                    if event.keystroke.modifiers.modified() {
+                                                        return;
+                                                    }
+                                                    match event.keystroke.key.as_str() {
+                                                        "down" => {
+                                                            workspace
+                                                                .move_left_dock_activity_bar_item_focus(
+                                                                    true, window, cx,
+                                                                );
+                                                            cx.stop_propagation();
+                                                        }
+                                                        "up" => {
+                                                            workspace
+                                                                .move_left_dock_activity_bar_item_focus(
+                                                                    false, window, cx,
+                                                                );
+                                                            cx.stop_propagation();
+                                                        }
+                                                        _ => {}
+                                                    }
+                                                },
+                                            ))
+                                            .w(LEFT_DOCK_ACTIVITY_BAR_WIDTH)
+                                            .h_full()
+                                            .flex_none()
+                                            .border_r_1()
+                                            .border_color(colors.border)
+                                            .bg(colors.panel_background)
+                                            .child(self.left_dock_buttons.clone()),
+                                    )
+                                    .child(div().flex_1().min_w_0().h_full().child({
+                                        match bottom_dock_layout {
                                     BottomDockLayout::Full => div()
                                         .flex()
                                         .flex_col()
@@ -9518,8 +9603,9 @@ impl Render for Workspace {
                                             window,
                                             cx,
                                         )),
-                                }
-                            })
+                                                }
+                                    })),
+                            )
                             .children(self.zoomed.as_ref().and_then(|view| {
                                 let zoomed_view = view.upgrade()?;
                                 let div = div()
@@ -11766,7 +11852,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        dock::{PanelEvent, test::TestPanel},
+        dock::{PanelButtonsOrientation, PanelEvent, test::TestPanel},
         invalid_item_view::InvalidItemView,
         item::{
             ItemBufferKind, ItemEvent,
@@ -14627,6 +14713,8 @@ mod tests {
 
             let center_column_count = workspace.center.full_height_column_count();
             assert_eq!(center_column_count, 2);
+
+            workspace.bounds.size.width = px(1920.);
 
             let dock = workspace.right_dock().read(cx);
             assert_eq!(workspace.dock_size(&dock, window, cx).unwrap(), px(640.));
@@ -17584,6 +17672,60 @@ mod tests {
         workspace.read_with(cx, |workspace, cx| {
             let visible = workspace.status_bar_visible(cx);
             assert!(visible, "Status bar should be visible when show is true");
+        });
+    }
+
+    #[gpui::test]
+    async fn test_left_dock_uses_vertical_panel_buttons(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, [], cx).await;
+        let (workspace, _cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+
+        workspace.read_with(cx, |workspace, cx| {
+            assert_eq!(
+                workspace.left_dock_buttons.read(cx).orientation(),
+                PanelButtonsOrientation::Vertical
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_workspace_content_bounds_exclude_left_dock_activity_bar(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, [], cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+        cx.run_until_parked();
+
+        let activity_bar_bounds = cx
+            .debug_bounds("left-dock-activity-bar")
+            .expect("activity bar should be rendered");
+        assert_eq!(activity_bar_bounds.size.width, px(40.));
+        workspace.read_with(cx, |workspace, _| {
+            assert_eq!(workspace.bounds.left(), activity_bar_bounds.right());
+        });
+    }
+
+    #[gpui::test]
+    async fn test_activity_bar_is_focusable_when_left_dock_is_closed(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, [], cx).await;
+        let (workspace, _cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
+
+        workspace.read_with(cx, |workspace, cx| {
+            let focusable_parts = workspace.focusable_parts(cx);
+            assert!(focusable_parts.iter().any(|part| {
+                part.container == workspace.left_dock_activity_bar_focus_handle
+                    && matches!(&part.behavior, PartBehavior::Toolbar)
+            }));
         });
     }
 
