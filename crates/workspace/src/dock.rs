@@ -9,9 +9,9 @@ use db::kvp::KeyValueStore;
 
 use gpui::{
     Action, Anchor, AnyView, App, Axis, Context, Entity, EntityId, EventEmitter, FocusHandle,
-    Focusable, IntoElement, KeyContext, MouseButton, MouseDownEvent, MouseUpEvent, ParentElement,
-    Render, SharedString, StyleRefinement, Styled, Subscription, WeakEntity, Window, deferred, div,
-    px,
+    Focusable, InteractiveElement, IntoElement, KeyContext, MouseButton, MouseDownEvent,
+    MouseUpEvent, ParentElement, Render, SharedString, StyleRefinement, Styled, Subscription,
+    WeakEntity, Window, deferred, div, px,
 };
 use serde::{Deserialize, Serialize};
 use settings::{Settings, SettingsStore, TerminalDockPosition};
@@ -387,8 +387,36 @@ struct PanelEntry {
     _subscriptions: [Subscription; 4],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PanelButtonsOrientation {
+    Horizontal,
+    Vertical,
+}
+
+impl PanelButtonsOrientation {
+    fn menu_anchors(self, dock_position: DockPosition) -> (Anchor, Anchor) {
+        match self {
+            Self::Vertical => (Anchor::TopLeft, Anchor::TopRight),
+            Self::Horizontal => match dock_position {
+                DockPosition::Left => (Anchor::BottomLeft, Anchor::TopLeft),
+                DockPosition::Bottom | DockPosition::Right => {
+                    (Anchor::BottomRight, Anchor::TopRight)
+                }
+            },
+        }
+    }
+
+    fn selected_button_style(self) -> Option<ui::ButtonStyle> {
+        match self {
+            Self::Horizontal => None,
+            Self::Vertical => Some(ui::ButtonStyle::Filled),
+        }
+    }
+}
+
 pub struct PanelButtons {
     dock: Entity<Dock>,
+    orientation: PanelButtonsOrientation,
     _settings_subscription: Subscription,
 }
 
@@ -1378,12 +1406,30 @@ impl Render for Dock {
 
 impl PanelButtons {
     pub fn new(dock: Entity<Dock>, cx: &mut Context<Self>) -> Self {
+        Self::with_orientation(dock, PanelButtonsOrientation::Horizontal, cx)
+    }
+
+    pub fn vertical(dock: Entity<Dock>, cx: &mut Context<Self>) -> Self {
+        Self::with_orientation(dock, PanelButtonsOrientation::Vertical, cx)
+    }
+
+    fn with_orientation(
+        dock: Entity<Dock>,
+        orientation: PanelButtonsOrientation,
+        cx: &mut Context<Self>,
+    ) -> Self {
         cx.observe(&dock, |_, _, cx| cx.notify()).detach();
         let settings_subscription = cx.observe_global::<SettingsStore>(|_, cx| cx.notify());
         Self {
             dock,
+            orientation,
             _settings_subscription: settings_subscription,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn orientation(&self) -> PanelButtonsOrientation {
+        self.orientation
     }
 }
 
@@ -1393,11 +1439,9 @@ impl Render for PanelButtons {
         let active_index = dock.active_panel_index;
         let is_open = dock.is_open;
         let dock_position = dock.position;
+        let selected_button_style = self.orientation.selected_button_style();
 
-        let (menu_anchor, menu_attach) = match dock.position {
-            DockPosition::Left => (Anchor::BottomLeft, Anchor::TopLeft),
-            DockPosition::Bottom | DockPosition::Right => (Anchor::BottomRight, Anchor::TopRight),
-        };
+        let (menu_anchor, menu_attach) = self.orientation.menu_anchors(dock.position);
 
         let dock_entity = self.dock.clone();
         let workspace = dock.workspace.clone();
@@ -1536,6 +1580,9 @@ impl Render for PanelButtons {
                             let button = IconButton::new((name, is_active_button as u64), icon)
                                 .icon_size(IconSize::Small)
                                 .toggle_state(is_active_button)
+                                .when_some(selected_button_style, |this, style| {
+                                    this.selected_style(style)
+                                })
                                 .tab_index(0isize)
                                 .aria_label(icon_tooltip)
                                 .on_click({
@@ -1569,18 +1616,39 @@ impl Render for PanelButtons {
 
         let has_buttons = !buttons.is_empty();
 
-        h_flex()
+        let button_container_id = match dock.position {
+            DockPosition::Left => "panel-buttons-left",
+            DockPosition::Bottom => "panel-buttons-bottom",
+            DockPosition::Right => "panel-buttons-right",
+        };
+
+        let button_container = match self.orientation {
+            PanelButtonsOrientation::Horizontal => h_flex().id(button_container_id),
+            PanelButtonsOrientation::Vertical => v_flex()
+                .id(button_container_id)
+                .size_full()
+                .items_center()
+                .py_1()
+                .overflow_y_scroll()
+                .scrollbar_width(px(0.)),
+        };
+
+        button_container
             .gap_1()
             .when(
-                has_buttons
+                self.orientation == PanelButtonsOrientation::Horizontal
+                    && has_buttons
                     && (dock.position == DockPosition::Bottom
                         || dock.position == DockPosition::Right),
                 |this| this.child(Divider::vertical().color(DividerColor::Border)),
             )
             .children(buttons)
-            .when(has_buttons && dock.position == DockPosition::Left, |this| {
-                this.child(Divider::vertical().color(DividerColor::Border))
-            })
+            .when(
+                self.orientation == PanelButtonsOrientation::Horizontal
+                    && has_buttons
+                    && dock.position == DockPosition::Left,
+                |this| this.child(Divider::vertical().color(DividerColor::Border)),
+            )
     }
 }
 
@@ -1598,6 +1666,43 @@ impl StatusItemView for PanelButtons {
         // Panel buttons are hidden on a per-panel basis through each panel
         // button's own context menu.
         None
+    }
+}
+
+#[cfg(test)]
+mod panel_buttons_tests {
+    use super::*;
+
+    #[test]
+    fn panel_button_orientation_selects_context_menu_anchors() {
+        assert_eq!(
+            PanelButtonsOrientation::Horizontal.menu_anchors(DockPosition::Left),
+            (Anchor::BottomLeft, Anchor::TopLeft)
+        );
+        assert_eq!(
+            PanelButtonsOrientation::Horizontal.menu_anchors(DockPosition::Bottom),
+            (Anchor::BottomRight, Anchor::TopRight)
+        );
+        assert_eq!(
+            PanelButtonsOrientation::Horizontal.menu_anchors(DockPosition::Right),
+            (Anchor::BottomRight, Anchor::TopRight)
+        );
+        assert_eq!(
+            PanelButtonsOrientation::Vertical.menu_anchors(DockPosition::Left),
+            (Anchor::TopLeft, Anchor::TopRight)
+        );
+    }
+
+    #[test]
+    fn panel_button_orientation_selects_neutral_selected_style() {
+        assert_eq!(
+            PanelButtonsOrientation::Vertical.selected_button_style(),
+            Some(ui::ButtonStyle::Filled)
+        );
+        assert_eq!(
+            PanelButtonsOrientation::Horizontal.selected_button_style(),
+            None
+        );
     }
 }
 
