@@ -393,6 +393,13 @@ pub(crate) enum PanelButtonsOrientation {
     Vertical,
 }
 
+#[derive(Clone, Copy)]
+struct PanelButtonVisuals {
+    icon_size: ui::IconSize,
+    button_size: Option<ui::ButtonSize>,
+    width: Option<Pixels>,
+}
+
 impl PanelButtonsOrientation {
     fn menu_anchors(self, dock_position: DockPosition) -> (Anchor, Anchor) {
         match self {
@@ -410,6 +417,21 @@ impl PanelButtonsOrientation {
         match self {
             Self::Horizontal => None,
             Self::Vertical => Some(ui::ButtonStyle::Filled),
+        }
+    }
+
+    fn button_visuals(self) -> PanelButtonVisuals {
+        match self {
+            Self::Horizontal => PanelButtonVisuals {
+                icon_size: ui::IconSize::Small,
+                button_size: None,
+                width: None,
+            },
+            Self::Vertical => PanelButtonVisuals {
+                icon_size: ui::IconSize::Custom(ui::rems_from_px(18_f32)),
+                button_size: Some(ui::ButtonSize::Large),
+                width: Some(px(34.)),
+            },
         }
     }
 }
@@ -1440,6 +1462,7 @@ impl Render for PanelButtons {
         let is_open = dock.is_open;
         let dock_position = dock.position;
         let selected_button_style = self.orientation.selected_button_style();
+        let button_visuals = self.orientation.button_visuals();
 
         let (menu_anchor, menu_attach) = self.orientation.menu_anchors(dock.position);
 
@@ -1578,7 +1601,9 @@ impl Render for PanelButtons {
                             // Include active state in element ID to invalidate the cached
                             // tooltip when panel state changes (e.g., via keyboard shortcut)
                             let button = IconButton::new((name, is_active_button as u64), icon)
-                                .icon_size(IconSize::Small)
+                                .icon_size(button_visuals.icon_size)
+                                .when_some(button_visuals.button_size, |this, size| this.size(size))
+                                .when_some(button_visuals.width, |this, width| this.width(width))
                                 .toggle_state(is_active_button)
                                 .when_some(selected_button_style, |this, style| {
                                     this.selected_style(style)
@@ -1703,6 +1728,19 @@ mod panel_buttons_tests {
             PanelButtonsOrientation::Horizontal.selected_button_style(),
             None
         );
+    }
+
+    #[test]
+    fn panel_button_orientation_selects_compact_enlarged_vertical_metrics() {
+        let horizontal = PanelButtonsOrientation::Horizontal.button_visuals();
+        assert!(horizontal.icon_size == ui::IconSize::Small);
+        assert!(horizontal.button_size.is_none());
+        assert_eq!(horizontal.width, None);
+
+        let vertical = PanelButtonsOrientation::Vertical.button_visuals();
+        assert!(vertical.icon_size == ui::IconSize::Custom(ui::rems_from_px(18_f32)));
+        assert!(vertical.button_size == Some(ui::ButtonSize::Large));
+        assert_eq!(vertical.width, Some(px(34.)));
     }
 }
 
