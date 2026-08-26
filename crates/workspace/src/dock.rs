@@ -8,10 +8,10 @@ use client::proto;
 use db::kvp::KeyValueStore;
 
 use gpui::{
-    Action, Anchor, AnyView, App, Axis, Context, Entity, EntityId, EventEmitter, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, KeyContext, MouseButton, MouseDownEvent,
-    MouseUpEvent, ParentElement, Render, SharedString, StyleRefinement, Styled, Subscription,
-    WeakEntity, Window, deferred, div, px,
+    Action, Anchor, AnyElement, AnyView, App, Axis, Context, Entity, EntityId, EventEmitter,
+    FocusHandle, Focusable, InteractiveElement, IntoElement, KeyContext, MouseButton,
+    MouseDownEvent, MouseUpEvent, ParentElement, Render, SharedString, StyleRefinement, Styled,
+    Subscription, WeakEntity, Window, deferred, div, px,
 };
 use serde::{Deserialize, Serialize};
 use settings::{Settings, SettingsStore, TerminalDockPosition};
@@ -32,6 +32,38 @@ pub enum PanelEvent {
 }
 
 pub use proto::PanelId;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ActivityBarPlacement {
+    #[default]
+    Top,
+    Bottom,
+}
+
+struct ActivityBarEntry<T> {
+    priority: u32,
+    placement: ActivityBarPlacement,
+    item: T,
+}
+
+impl<T> ActivityBarEntry<T> {
+    fn new(priority: u32, placement: ActivityBarPlacement, item: T) -> Self {
+        Self {
+            priority,
+            placement,
+            item,
+        }
+    }
+}
+
+fn arrange_activity_bar_entries<T>(
+    mut entries: Vec<ActivityBarEntry<T>>,
+) -> (Vec<ActivityBarEntry<T>>, Vec<ActivityBarEntry<T>>) {
+    entries.sort_by_key(|entry| entry.priority);
+    entries
+        .into_iter()
+        .partition(|entry| entry.placement == ActivityBarPlacement::Top)
+}
 
 pub trait Panel: Focusable + EventEmitter<PanelEvent> + Render + Sized {
     fn persistent_name() -> &'static str;
@@ -89,6 +121,9 @@ pub trait Panel: Focusable + EventEmitter<PanelEvent> + Render + Sized {
         None
     }
     fn activation_priority(&self) -> u32;
+    fn activity_bar_placement() -> ActivityBarPlacement {
+        ActivityBarPlacement::Top
+    }
     fn enabled(&self, _cx: &App) -> bool {
         true
     }
@@ -131,6 +166,7 @@ pub trait PanelHandle: Send + Sync {
     fn activation_focus_handle(&self, cx: &App) -> FocusHandle;
     fn to_any(&self) -> AnyView;
     fn activation_priority(&self, cx: &App) -> u32;
+    fn activity_bar_placement(&self) -> ActivityBarPlacement;
     fn enabled(&self, cx: &App) -> bool;
     fn is_agent_panel(&self, cx: &App) -> bool;
     fn hide_button_setting(&self, cx: &App) -> Option<HideStatusItem>;
@@ -257,6 +293,10 @@ where
 
     fn activation_priority(&self, cx: &App) -> u32 {
         self.read(cx).activation_priority()
+    }
+
+    fn activity_bar_placement(&self) -> ActivityBarPlacement {
+        T::activity_bar_placement()
     }
 
     fn enabled(&self, cx: &App) -> bool {
@@ -439,7 +479,13 @@ impl PanelButtonsOrientation {
 pub struct PanelButtons {
     dock: Entity<Dock>,
     orientation: PanelButtonsOrientation,
+    activity_bar_items: Vec<ActivityBarItem>,
     _settings_subscription: Subscription,
+}
+
+struct ActivityBarItem {
+    priority: u32,
+    view: AnyView,
 }
 
 pub(crate) const PANEL_SIZE_STATE_KEY: &str = "dock_panel_size";
@@ -1445,8 +1491,22 @@ impl PanelButtons {
         Self {
             dock,
             orientation,
+            activity_bar_items: Vec::new(),
             _settings_subscription: settings_subscription,
         }
+    }
+
+    pub fn add_activity_bar_item<V: Render>(
+        &mut self,
+        priority: u32,
+        view: Entity<V>,
+        cx: &mut Context<Self>,
+    ) {
+        self.activity_bar_items.push(ActivityBarItem {
+            priority,
+            view: view.into(),
+        });
+        cx.notify();
     }
 
     #[cfg(test)]
@@ -1468,7 +1528,7 @@ impl Render for PanelButtons {
 
         let dock_entity = self.dock.clone();
         let workspace = dock.workspace.clone();
-        let mut buttons: Vec<_> = dock
+        let buttons: Vec<_> = dock
             .panel_entries
             .iter()
             .enumerate()
@@ -1505,7 +1565,9 @@ impl Render for PanelButtons {
                 let focus_handle = dock.focus_handle(cx);
                 let icon_label = entry.panel.icon_label(window, cx);
 
-                Some(
+                Some(ActivityBarEntry::new(
+                    entry.panel.activation_priority(cx),
+                    entry.panel.activity_bar_placement(),
                     right_click_menu(name)
                         .menu(move |window, cx| {
                             const POSITIONS: [DockPosition; 3] = [
@@ -1631,15 +1693,9 @@ impl Render for PanelButtons {
                                 |this, count| this.child(CountBadge::new(count)),
                             )
                         }),
-                )
+                ))
             })
             .collect();
-
-        if dock_position == DockPosition::Right {
-            buttons.reverse();
-        }
-
-        let has_buttons = !buttons.is_empty();
 
         let button_container_id = match dock.position {
             DockPosition::Left => "panel-buttons-left",
@@ -1647,33 +1703,82 @@ impl Render for PanelButtons {
             DockPosition::Right => "panel-buttons-right",
         };
 
-        let button_container = match self.orientation {
-            PanelButtonsOrientation::Horizontal => h_flex().id(button_container_id),
-            PanelButtonsOrientation::Vertical => v_flex()
-                .id(button_container_id)
-                .size_full()
-                .items_center()
-                .py_1()
-                .overflow_y_scroll()
-                .scrollbar_width(px(0.)),
-        };
+        match self.orientation {
+            PanelButtonsOrientation::Horizontal => {
+                let mut buttons: Vec<_> = buttons.into_iter().map(|entry| entry.item).collect();
+                if dock_position == DockPosition::Right {
+                    buttons.reverse();
+                }
+                let has_buttons = !buttons.is_empty();
 
-        button_container
-            .gap_1()
-            .when(
-                self.orientation == PanelButtonsOrientation::Horizontal
-                    && has_buttons
-                    && (dock.position == DockPosition::Bottom
-                        || dock.position == DockPosition::Right),
-                |this| this.child(Divider::vertical().color(DividerColor::Border)),
-            )
-            .children(buttons)
-            .when(
-                self.orientation == PanelButtonsOrientation::Horizontal
-                    && has_buttons
-                    && dock.position == DockPosition::Left,
-                |this| this.child(Divider::vertical().color(DividerColor::Border)),
-            )
+                h_flex()
+                    .id(button_container_id)
+                    .gap_1()
+                    .when(
+                        has_buttons
+                            && (dock.position == DockPosition::Bottom
+                                || dock.position == DockPosition::Right),
+                        |this| this.child(Divider::vertical().color(DividerColor::Border)),
+                    )
+                    .children(buttons)
+                    .when(has_buttons && dock.position == DockPosition::Left, |this| {
+                        this.child(Divider::vertical().color(DividerColor::Border))
+                    })
+            }
+            PanelButtonsOrientation::Vertical => {
+                let scroll_container_id = match dock.position {
+                    DockPosition::Left => "panel-buttons-left-scroll",
+                    DockPosition::Bottom => "panel-buttons-bottom-scroll",
+                    DockPosition::Right => "panel-buttons-right-scroll",
+                };
+                let mut entries: Vec<ActivityBarEntry<AnyElement>> = buttons
+                    .into_iter()
+                    .map(|entry| {
+                        ActivityBarEntry::new(
+                            entry.priority,
+                            entry.placement,
+                            entry.item.into_any_element(),
+                        )
+                    })
+                    .collect();
+                entries.extend(self.activity_bar_items.iter().map(|item| {
+                    ActivityBarEntry::new(
+                        item.priority,
+                        ActivityBarPlacement::Top,
+                        item.view.clone().into_any_element(),
+                    )
+                }));
+                let (top, bottom) = arrange_activity_bar_entries(entries);
+                let has_bottom = !bottom.is_empty();
+
+                v_flex()
+                    .id(button_container_id)
+                    .size_full()
+                    .items_center()
+                    .py_1()
+                    .overflow_hidden()
+                    .child(
+                        v_flex()
+                            .id(scroll_container_id)
+                            .flex_1()
+                            .min_h_0()
+                            .items_center()
+                            .gap_1()
+                            .overflow_y_scroll()
+                            .scrollbar_width(px(0.))
+                            .children(top.into_iter().map(|entry| entry.item)),
+                    )
+                    .when(has_bottom, |this| {
+                        this.child(
+                            v_flex()
+                                .flex_none()
+                                .items_center()
+                                .gap_1()
+                                .children(bottom.into_iter().map(|entry| entry.item)),
+                        )
+                    })
+            }
+        }
     }
 }
 
@@ -1697,6 +1802,40 @@ impl StatusItemView for PanelButtons {
 #[cfg(test)]
 mod panel_buttons_tests {
     use super::*;
+
+    #[test]
+    fn activity_bar_entries_are_ordered_and_partitioned_by_placement() {
+        let entries = vec![
+            ActivityBarEntry::new(6, ActivityBarPlacement::Top, "outline"),
+            ActivityBarEntry::new(5, ActivityBarPlacement::Bottom, "collab"),
+            ActivityBarEntry::new(3, ActivityBarPlacement::Top, "git"),
+            ActivityBarEntry::new(1, ActivityBarPlacement::Top, "project"),
+            ActivityBarEntry::new(1, ActivityBarPlacement::Top, "project-secondary"),
+            ActivityBarEntry::new(4, ActivityBarPlacement::Top, "search"),
+        ];
+
+        let (top, bottom) = arrange_activity_bar_entries(entries);
+
+        assert_eq!(
+            top.into_iter().map(|entry| entry.item).collect::<Vec<_>>(),
+            ["project", "project-secondary", "git", "search", "outline"]
+        );
+        assert_eq!(
+            bottom
+                .into_iter()
+                .map(|entry| entry.item)
+                .collect::<Vec<_>>(),
+            ["collab"]
+        );
+    }
+
+    #[test]
+    fn panel_activity_bar_placement_defaults_to_top() {
+        assert_eq!(
+            <test::TestPanel as Panel>::activity_bar_placement(),
+            ActivityBarPlacement::Top
+        );
+    }
 
     #[test]
     fn panel_button_orientation_selects_context_menu_anchors() {

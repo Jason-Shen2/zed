@@ -29,7 +29,7 @@ pub mod welcome;
 pub mod workspace_error;
 mod workspace_settings;
 
-pub use dock::Panel;
+pub use dock::{ActivityBarPlacement, Panel};
 pub use multi_workspace::{
     CloseWorkspaceSidebar, DraggedSidebar, FocusWorkspaceSidebar, MoveProjectDown,
     MoveProjectToNewWindow, MoveProjectUp, MultiWorkspace, MultiWorkspaceEvent, NewThread,
@@ -2212,6 +2212,17 @@ impl Workspace {
 
     pub fn left_dock(&self) -> &Entity<Dock> {
         &self.left_dock
+    }
+
+    pub fn add_left_dock_activity_bar_item<V: Render>(
+        &mut self,
+        priority: u32,
+        view: Entity<V>,
+        cx: &mut Context<Self>,
+    ) {
+        self.left_dock_buttons.update(cx, |buttons, cx| {
+            buttons.add_activity_bar_item(priority, view, cx);
+        });
     }
 
     pub fn bottom_dock(&self) -> &Entity<Dock> {
