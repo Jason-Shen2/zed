@@ -172,7 +172,7 @@ use crate::{
 
 pub const SERIALIZATION_THROTTLE_TIME: Duration = Duration::from_millis(200);
 pub const MAX_RECENT_SELECTIONS: usize = 20;
-const LEFT_DOCK_ACTIVITY_BAR_WIDTH: Pixels = px(40.);
+const LEFT_DOCK_ACTIVITY_BAR_WIDTH: Pixels = px(44.);
 
 static ZED_WINDOW_SIZE: LazyLock<Option<Size<Pixels>>> = LazyLock::new(|| {
     env::var("ZED_WINDOW_SIZE")
@@ -9365,7 +9365,7 @@ impl Render for Workspace {
                                             .flex_none()
                                             .border_r_1()
                                             .border_color(colors.border)
-                                            .bg(colors.panel_background)
+                                            .bg(colors.background)
                                             .child(self.left_dock_buttons.clone()),
                                     )
                                     .child(div().flex_1().min_w_0().h_full().child({
@@ -15213,6 +15213,8 @@ mod tests {
         let (multi_workspace, cx) =
             cx.add_window_view(|window, cx| MultiWorkspace::test_new(project, window, cx));
         let workspace = multi_workspace.read_with(cx, |mw, _| mw.workspace().clone());
+        let expected_left_dock_width =
+            |available_width: Pixels| 1.0_f32 / 3.0_f32 * available_width;
 
         workspace.update(cx, |workspace, _cx| {
             workspace.bounds.size.width = px(900.);
@@ -15261,7 +15263,7 @@ mod tests {
 
             assert_eq!(
                 left_width,
-                workspace.bounds.size.width / 3.,
+                expected_left_dock_width(workspace.bounds.size.width),
                 "flexible left panel width should match the average center column width"
             );
         });
@@ -15283,7 +15285,7 @@ mod tests {
 
             assert_eq!(
                 left_width,
-                workspace.bounds.size.width / 3.,
+                expected_left_dock_width(workspace.bounds.size.width),
                 "flexible left panel width should still match the average center column width"
             );
         });
@@ -15309,7 +15311,7 @@ mod tests {
             let available_width = workspace.bounds.size.width - right_width;
             assert_eq!(
                 left_width,
-                available_width / 3.,
+                expected_left_dock_width(available_width),
                 "flexible left panel should keep matching one average center column"
             );
         });
@@ -17705,7 +17707,7 @@ mod tests {
         let activity_bar_bounds = cx
             .debug_bounds("left-dock-activity-bar")
             .expect("activity bar should be rendered");
-        assert_eq!(activity_bar_bounds.size.width, px(40.));
+        assert_eq!(activity_bar_bounds.size.width, px(44.));
         workspace.read_with(cx, |workspace, _| {
             assert_eq!(workspace.bounds.left(), activity_bar_bounds.right());
         });
