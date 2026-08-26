@@ -13,7 +13,7 @@ The customized build should present left-dock panel buttons in a narrow vertical
 - Preserve existing panel activation, closing, badges, tooltips, context menus, keyboard navigation, and accessibility labels.
 - Automatically reflect panels being added to or moved out of the left dock.
 - Avoid changing individual panel implementations.
-- Keep the workspace layout change isolated from the three bottom-dock layout variants.
+- Keep the workspace layout change isolated from all four bottom-dock layout variants.
 
 ## Non-goals
 
@@ -77,7 +77,7 @@ The workspace content area will be wrapped in one horizontal container:
 1. The activity bar is the fixed-width first child.
 2. The existing workspace content is the flexible second child.
 
-This wrapper sits below the title bar and above the status bar. It encloses the existing `bottom_dock_layout` match instead of being inserted separately into the `Full`, `LeftAligned`, and `RightAligned` branches. Consequently, the activity bar spans the main content and bottom-dock area consistently while the three existing layout implementations remain unchanged.
+This wrapper sits below the title bar and above the status bar. It encloses the existing `bottom_dock_layout` match instead of being inserted separately into the `Full`, `LeftAligned`, `RightAligned`, and `Contained` branches. Consequently, the activity bar spans the main content and bottom-dock area consistently while the four existing layout implementations remain unchanged.
 
 ## Visual design
 
@@ -132,10 +132,10 @@ Implementation verification will cover:
 - Count badges remain visible in the vertical layout.
 - Context menus open toward the workspace instead of outside the window.
 - Keyboard focus and action dispatch continue to work.
-- `Full`, `LeftAligned`, and `RightAligned` bottom-dock layouts all render correctly.
+- `Full`, `LeftAligned`, `RightAligned`, and `Contained` bottom-dock layouts all render correctly.
 - Light and dark themes, narrow windows, closed left docks, and overflowing button lists remain usable.
 
-Tests reuse existing GPUI dock test support. A focused component or workspace test covers the state transitions, followed by visual verification for spacing, theme behavior, and the three bottom-dock layouts.
+Tests reuse existing GPUI dock test support. A focused component or workspace test covers the state transitions, followed by visual verification for spacing, theme behavior, and all four bottom-dock layouts.
 
 ## Upstream compatibility
 
