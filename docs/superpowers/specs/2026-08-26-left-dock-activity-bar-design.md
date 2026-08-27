@@ -81,12 +81,12 @@ This wrapper sits below the title bar and above the status bar. It encloses the 
 
 ## Visual design
 
-- Fixed width of 40 pixels, represented with the corresponding existing UI spacing token.
-- Panel-compatible background color with a right border using the theme's existing border color.
-- Existing small panel icons and standard `IconButton` interaction states.
-- Top-aligned panel buttons with compact vertical spacing.
+- Fixed width of 44 pixels. This keeps the rail compact while providing more room for the vertical controls than the initial 40-pixel implementation.
+- Use the theme's general `background` color for the activity bar and keep left-dock content on `panel_background`. The existing right border uses the theme's border color, producing a subtle surface distinction in light and dark themes without introducing customization-specific colors.
+- Vertical panel buttons use an approximately 34-by-32-pixel hit area with 18-pixel icons. Horizontal right- and bottom-dock buttons retain their existing dimensions and icon size.
+- Top-align panel buttons with approximately 4 pixels of top padding and 4 pixels between buttons.
 - Existing count badges, including Git change counts.
-- Neutral selected background only. There is no blue accent bar or other colored selection marker.
+- Selected vertical buttons use the theme's neutral `element_background` and default icon color. There is no blue icon tint, blue accent bar, or other colored selection marker.
 - The rail remains visible when the left dock is closed.
 - If the number of buttons exceeds the available height, the rail scrolls vertically without a persistent scrollbar consuming width.
 
@@ -130,6 +130,8 @@ Implementation verification will cover:
 - Moving panels among left, right, and bottom docks moves their buttons to the correct container.
 - Hidden panel buttons remain hidden.
 - Count badges remain visible in the vertical layout.
+- Vertical buttons use the compact enlarged metrics, while horizontal panel buttons retain their existing metrics.
+- The selected vertical button uses the neutral selected style and the activity bar uses a distinct theme surface from adjacent panel content.
 - Context menus open toward the workspace instead of outside the window.
 - Keyboard focus and action dispatch continue to work.
 - `Full`, `LeftAligned`, `RightAligned`, and `Contained` bottom-dock layouts all render correctly.

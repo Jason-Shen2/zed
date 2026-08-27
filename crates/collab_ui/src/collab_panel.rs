@@ -3932,6 +3932,10 @@ impl Render for CollabPanel {
 impl EventEmitter<PanelEvent> for CollabPanel {}
 
 impl Panel for CollabPanel {
+    fn activity_bar_placement() -> workspace::ActivityBarPlacement {
+        workspace::ActivityBarPlacement::Bottom
+    }
+
     fn activation_focus_handle(&self, cx: &App) -> FocusHandle {
         let status = *self.client.status().borrow();
         let is_collaboration_disabled = self.is_collaboration_disabled_by_organization(cx);
@@ -4267,6 +4271,20 @@ impl Render for CollabNotificationToast {
 
 impl EventEmitter<DismissEvent> for CollabNotificationToast {}
 impl EventEmitter<SuppressEvent> for CollabNotificationToast {}
+
+#[cfg(test)]
+mod tests {
+    use super::CollabPanel;
+    use workspace::{ActivityBarPlacement, Panel};
+
+    #[test]
+    fn collab_panel_uses_bottom_activity_bar_placement() {
+        assert_eq!(
+            <CollabPanel as Panel>::activity_bar_placement(),
+            ActivityBarPlacement::Bottom
+        );
+    }
+}
 
 #[cfg(any(test, feature = "test-support"))]
 impl CollabPanel {

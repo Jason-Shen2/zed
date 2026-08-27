@@ -600,7 +600,10 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             }
         });
 
-        let search_button = cx.new(|_| search::search_status_button::SearchButton::new());
+        let search_button = cx.new(|_| {
+            search::search_status_button::SearchButton::activity_bar(workspace_handle.downgrade())
+        });
+        workspace.add_left_dock_activity_bar_item(4, search_button, cx);
         let diagnostic_summary =
             cx.new(|cx| diagnostics::items::DiagnosticIndicator::new(workspace, cx));
         let active_file_name = cx.new(|_| workspace::active_file_name::ActiveFileName::new());
@@ -636,7 +639,6 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
         let merge_conflict_indicator =
             cx.new(|cx| git_ui::MergeConflictIndicator::new(workspace, cx));
         workspace.status_bar().update(cx, |status_bar, cx| {
-            status_bar.add_left_item(search_button, window, cx);
             status_bar.add_left_item(lsp_button, window, cx);
             status_bar.add_left_item(diagnostic_summary, window, cx);
             status_bar.add_left_item(active_file_name, window, cx);
@@ -3058,6 +3060,40 @@ mod tests {
         indicator.update(cx, |indicator, cx| {
             assert_eq!(indicator.message_to_render(cx), None);
         });
+    }
+
+    #[gpui::test]
+    async fn test_project_search_button_is_only_in_left_activity_bar(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        let project = Project::test(app_state.fs.clone(), [], cx).await;
+        let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project, window, cx));
+        let workspace = window
+            .read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone())
+            .expect("workspace window should be readable");
+
+        workspace.read_with(cx, |workspace, cx| {
+            assert!(
+                workspace
+                    .status_bar()
+                    .read(cx)
+                    .item_of_type::<search::search_status_button::SearchButton>()
+                    .is_none(),
+                "project search must not be registered in the status bar"
+            );
+        });
+
+        let cx = &mut VisualTestContext::from_window(*window, cx);
+        cx.run_until_parked();
+        let activity_bar_bounds = cx
+            .debug_bounds("left-dock-activity-bar")
+            .expect("left activity bar should be rendered");
+        let search_button_bounds = cx
+            .debug_bounds("project-search-indicator")
+            .expect("project search button should be rendered");
+        assert!(
+            search_button_bounds.is_contained_within(&activity_bar_bounds),
+            "project search button should be contained within the left activity bar"
+        );
     }
 
     #[gpui::test]
